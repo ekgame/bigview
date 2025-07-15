@@ -1,4 +1,8 @@
 mod file_reader;
+mod event_handler;
+mod text_utils;
+mod selection;
+mod constants;
 mod viewer;
 
 use anyhow::Result;
@@ -11,7 +15,8 @@ use crossterm::{
 use file_reader::FileReader;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use viewer::Viewer;
+use viewer::{Viewer, ViewerAction};
+use event_handler::EventHandler;
 
 #[derive(Parser)]
 #[command(name = "bigedit")]
@@ -34,8 +39,8 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     
-    // Run the viewer
-    let result = viewer.run(&mut terminal);
+    // Run the viewer with new event handling
+    let result = run_viewer(&mut viewer, &mut terminal);
     
     // Restore terminal
     disable_raw_mode()?;
@@ -47,5 +52,18 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
     
     result?;
+    Ok(())
+}
+
+fn run_viewer(viewer: &mut Viewer, terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Result<()> {
+    loop {
+        terminal.draw(|f| viewer.draw(f))?;
+        
+        let event = crossterm::event::read()?;
+        match EventHandler::handle_event(viewer, event) {
+            ViewerAction::Quit => break,
+            ViewerAction::None => continue,
+        }
+    }
     Ok(())
 }

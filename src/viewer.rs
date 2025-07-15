@@ -1,29 +1,40 @@
-use crate::file_reader::FileReader;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use clipboard::{ClipboardContext, ClipboardProvider};
+use crate::{
+    file_reader::FileReader,
+    selection::Selection,
+    text_utils::TextUtils,
+    constants::Constants,
+};
 use ratatui::{
-    backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame, Terminal,
+    Frame,
 };
-use std::io;
 
 #[derive(Debug, Clone)]
-struct Selection {
-    start_line: usize,
-    start_col: usize,
-    end_line: usize,
-    end_col: usize,
+pub struct ContextMenu {
+    pub x: u16,
+    pub y: u16,
+    pub items: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-struct ContextMenu {
-    x: u16,
-    y: u16,
-    items: Vec<String>,
+impl ContextMenu {
+    pub fn new(x: u16, y: u16) -> Self {
+        Self {
+            x,
+            y,
+            items: vec![
+                Constants::CONTEXT_MENU_COPY.to_string(),
+                Constants::CONTEXT_MENU_SEARCH.to_string(),
+            ],
+        }
+    }
+}
+
+pub enum ViewerAction {
+    None,
+    Quit,
 }
 
 pub struct Viewer {
@@ -48,124 +59,14 @@ impl Viewer {
             search_matches: Vec::new(),
             current_match: 0,
             in_search_mode: false,
-            viewport_height: 20,
+            viewport_height: Constants::DEFAULT_VIEWPORT_HEIGHT,
             selection: None,
             selecting: false,
             context_menu: None,
         }
     }
-
-    pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
-        loop {
-            terminal.draw(|f| self.draw(f))?;
-
-            match event::read()? {
-                Event::Key(key) => {
-                    match (self.in_search_mode, key.code) {
-                        (true, KeyCode::Esc) => {
-                            self.in_search_mode = false;
-                            self.search_term.clear();
-                        }
-                        (true, KeyCode::Enter) => {
-                            self.perform_search();
-                            self.in_search_mode = false;
-                        }
-                        (true, KeyCode::Backspace) => {
-                            self.search_term.pop();
-                        }
-                        (true, KeyCode::Char('v')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if let Ok(mut ctx) = ClipboardContext::new() {
-                                if let Ok(clipboard_content) = ctx.get_contents() {
-                                    // Only paste if clipboard contains text (no newlines)
-                                    if !clipboard_content.contains('\n') && !clipboard_content.contains('\r') {
-                                        self.search_term.push_str(&clipboard_content);
-                                    }
-                                }
-                            }
-                        }
-                        (true, KeyCode::Char(c)) => {
-                            self.search_term.push(c);
-                        }
-                        (false, KeyCode::Char('q')) => break,
-                        (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                        (false, KeyCode::Char('/')) => {
-                            self.in_search_mode = true;
-                            self.search_term.clear();
-                        }
-                        (false, KeyCode::Char('n')) => {
-                            self.next_match();
-                        }
-                        (false, KeyCode::Char('N')) => {
-                            self.prev_match();
-                        }
-                        (false, KeyCode::Up) => {
-                            self.scroll_up();
-                        }
-                        (false, KeyCode::Down) => {
-                            self.scroll_down();
-                        }
-                        (false, KeyCode::PageUp) => {
-                            self.page_up();
-                        }
-                        (false, KeyCode::PageDown) => {
-                            self.page_down();
-                        }
-                        (false, KeyCode::Home) => {
-                            self.current_line = 0;
-                        }
-                        (false, KeyCode::End) => {
-                            self.current_line = self.file_reader.line_count().saturating_sub(1);
-                        }
-                        _ => {}
-                    }
-                }
-                Event::Mouse(mouse) => {
-                    if !self.in_search_mode && self.context_menu.is_none() {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => {
-                                for _ in 0..3 {
-                                    self.scroll_up();
-                                }
-                            }
-                            MouseEventKind::ScrollDown => {
-                                for _ in 0..3 {
-                                    self.scroll_down();
-                                }
-                            }
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                self.handle_mouse_down(mouse.column, mouse.row);
-                            }
-                            MouseEventKind::Drag(MouseButton::Left) => {
-                                self.handle_mouse_drag(mouse.column, mouse.row);
-                            }
-                            MouseEventKind::Up(MouseButton::Left) => {
-                                self.handle_mouse_up(mouse.column, mouse.row);
-                            }
-                            MouseEventKind::Down(MouseButton::Right) => {
-                                self.handle_right_click(mouse.column, mouse.row);
-                            }
-                            _ => {}
-                        }
-                    } else if let Some(ref mut _menu) = self.context_menu {
-                        match mouse.kind {
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                if self.is_mouse_in_menu(mouse.column, mouse.row) {
-                                    self.handle_menu_click(mouse.column, mouse.row);
-                                } else {
-                                    self.context_menu = None;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn draw(&mut self, f: &mut Frame) {
+    
+    pub fn draw(&mut self, f: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -173,18 +74,230 @@ impl Viewer {
 
         self.viewport_height = chunks[0].height as usize;
         
-        // Main content area
         self.draw_content(f, chunks[0]);
         
-        // Context menu (if visible)
         if let Some(ref menu) = self.context_menu {
             self.draw_context_menu(f, menu);
         }
         
-        // Status bar
         self.draw_status_bar(f, chunks[1]);
     }
-
+    
+    // State queries
+    pub fn is_in_search_mode(&self) -> bool {
+        self.in_search_mode
+    }
+    
+    pub fn has_context_menu(&self) -> bool {
+        self.context_menu.is_some()
+    }
+    
+    // Search operations
+    pub fn enter_search_mode(&mut self) {
+        self.in_search_mode = true;
+        self.search_term.clear();
+    }
+    
+    pub fn exit_search_mode(&mut self) {
+        self.in_search_mode = false;
+    }
+    
+    pub fn add_to_search_term(&mut self, c: char) {
+        self.search_term.push(c);
+    }
+    
+    pub fn add_to_search_term_str(&mut self, s: &str) {
+        self.search_term.push_str(s);
+    }
+    
+    pub fn backspace_search_term(&mut self) {
+        self.search_term.pop();
+    }
+    
+    pub fn perform_search(&mut self) {
+        if self.search_term.is_empty() {
+            self.search_matches.clear();
+            return;
+        }
+        
+        self.search_matches = self.file_reader.search(&self.search_term);
+        self.current_match = 0;
+        
+        if !self.search_matches.is_empty() {
+            self.current_line = self.search_matches[0].saturating_sub(self.viewport_height / 2);
+        }
+    }
+    
+    pub fn next_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        
+        self.current_match = (self.current_match + 1) % self.search_matches.len();
+        let target_line = self.search_matches[self.current_match];
+        self.current_line = target_line.saturating_sub(self.viewport_height / 2);
+    }
+    
+    pub fn prev_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        
+        self.current_match = if self.current_match == 0 {
+            self.search_matches.len() - 1
+        } else {
+            self.current_match - 1
+        };
+        
+        let target_line = self.search_matches[self.current_match];
+        self.current_line = target_line.saturating_sub(self.viewport_height / 2);
+    }
+    
+    // Navigation operations
+    pub fn scroll_up(&mut self) {
+        self.current_line = self.current_line.saturating_sub(1);
+    }
+    
+    pub fn scroll_down(&mut self) {
+        let max_line = self.file_reader.line_count().saturating_sub(self.viewport_height);
+        if self.current_line < max_line {
+            self.current_line += 1;
+        }
+    }
+    
+    pub fn scroll_up_multiple(&mut self, count: usize) {
+        for _ in 0..count {
+            self.scroll_up();
+        }
+    }
+    
+    pub fn scroll_down_multiple(&mut self, count: usize) {
+        for _ in 0..count {
+            self.scroll_down();
+        }
+    }
+    
+    pub fn page_up(&mut self) {
+        self.current_line = self.current_line.saturating_sub(self.viewport_height);
+    }
+    
+    pub fn page_down(&mut self) {
+        let max_line = self.file_reader.line_count().saturating_sub(self.viewport_height);
+        self.current_line = (self.current_line + self.viewport_height).min(max_line);
+    }
+    
+    pub fn goto_start(&mut self) {
+        self.current_line = 0;
+    }
+    
+    pub fn goto_end(&mut self) {
+        self.current_line = self.file_reader.line_count().saturating_sub(1);
+    }
+    
+    // Selection operations
+    pub fn start_selection(&mut self, col: u16, row: u16) {
+        self.context_menu = None;
+        
+        if let Some((line, column)) = self.screen_to_text_coords(col, row) {
+            self.selection = Some(Selection::new(line, column));
+            self.selecting = true;
+        }
+    }
+    
+    pub fn update_selection(&mut self, col: u16, row: u16) {
+        if self.selecting {
+            if let Some((line, column)) = self.screen_to_text_coords(col, row) {
+                if let Some(ref mut selection) = self.selection {
+                    selection.update_end(line, column);
+                }
+            }
+        }
+    }
+    
+    pub fn end_selection(&mut self) {
+        self.selecting = false;
+        
+        if let Some(ref selection) = self.selection {
+            if selection.is_empty() {
+                self.selection = None;
+            }
+        }
+    }
+    
+    // Context menu operations
+    pub fn show_context_menu(&mut self, col: u16, row: u16) {
+        if self.selection.is_some() {
+            self.context_menu = Some(ContextMenu::new(col, row));
+        }
+    }
+    
+    pub fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+    
+    pub fn is_mouse_in_menu(&self, col: u16, row: u16) -> bool {
+        if let Some(ref menu) = self.context_menu {
+            let menu_height = menu.items.len() as u16;
+            col >= menu.x && col < menu.x + Constants::CONTEXT_MENU_WIDTH &&
+            row >= menu.y && row < menu.y + menu_height
+        } else {
+            false
+        }
+    }
+    
+    pub fn handle_menu_click(&mut self, _col: u16, row: u16) {
+        if let Some(ref menu) = self.context_menu {
+            let item_index = (row - menu.y) as usize;
+            if item_index < menu.items.len() {
+                match item_index {
+                    0 => self.copy_selection(),
+                    1 => self.search_selection(),
+                    _ => {}
+                }
+            }
+        }
+        self.context_menu = None;
+    }
+    
+    // Utility methods
+    fn screen_to_text_coords(&self, col: u16, row: u16) -> Option<(usize, usize)> {
+        if row == 0 || col < Constants::LINE_NUMBER_WIDTH {
+            return None;
+        }
+        
+        let text_row = (row - 1) as usize;
+        let text_col = (col - Constants::LINE_NUMBER_WIDTH) as usize;
+        
+        if text_row >= self.viewport_height {
+            return None;
+        }
+        
+        let line_num = self.current_line + text_row;
+        if line_num >= self.file_reader.line_count() {
+            return None;
+        }
+        
+        Some((line_num, text_col))
+    }
+    
+    fn copy_selection(&mut self) {
+        if let Some(ref selection) = self.selection {
+            let _ = selection.copy_to_clipboard(&self.file_reader);
+        }
+    }
+    
+    fn search_selection(&mut self) {
+        if let Some(ref selection) = self.selection {
+            if let Some(text) = selection.get_text(&self.file_reader) {
+                if !text.contains('\n') {
+                    self.search_term = text;
+                    self.perform_search();
+                }
+            }
+        }
+    }
+    
+    // Drawing methods
     fn draw_content(&self, f: &mut Frame, area: Rect) {
         let lines = self.file_reader.get_lines(self.current_line, self.viewport_height);
         
@@ -195,23 +308,11 @@ impl Viewer {
                 let line_num = self.current_line + i;
                 let line_number = format!("{:6} ", line_num + 1);
                 
-                let mut line_spans = vec![Span::styled(line_number, Style::default().fg(Color::Yellow))];
+                let mut spans = vec![Span::styled(line_number, Style::default().fg(Constants::LINE_NUMBER_COLOR))];
+                let text_spans = self.create_line_spans(line, line_num);
+                spans.extend(text_spans);
                 
-                // Apply selection highlighting first, then search highlighting
-                let text_spans = if self.selection.is_some() {
-                    self.apply_selection_highlighting(line, line_num)
-                } else {
-                    vec![Span::raw(line)]
-                };
-                
-                let final_spans = if !self.search_term.is_empty() && line.contains(&self.search_term) {
-                    self.apply_search_highlighting_to_spans(text_spans, &self.search_term, line_num)
-                } else {
-                    text_spans
-                };
-                
-                line_spans.extend(final_spans);
-                ListItem::new(Line::from(line_spans))
+                ListItem::new(Line::from(spans))
             })
             .collect();
 
@@ -220,7 +321,49 @@ impl Viewer {
 
         f.render_widget(list, area);
     }
-
+    
+    fn create_line_spans<'a>(&self, line: &'a str, line_num: usize) -> Vec<Span<'a>> {
+        let mut ranges = Vec::new();
+        
+        // Add selection highlighting
+        if let Some(ref selection) = self.selection {
+            if selection.contains_line(line_num) {
+                let (start_line, start_col, end_line, end_col) = selection.normalize();
+                let sel_start = if line_num == start_line { start_col } else { 0 };
+                let sel_end = if line_num == end_line { end_col } else { TextUtils::char_len(line) };
+                
+                ranges.push((sel_start, sel_end, Style::default()
+                    .bg(Constants::SELECTION_BG_COLOR)
+                    .fg(Constants::SELECTION_FG_COLOR)));
+            }
+        }
+        
+        // Add search highlighting
+        if !self.search_term.is_empty() && line.contains(&self.search_term) {
+            let is_current_match = !self.search_matches.is_empty() && 
+                self.search_matches[self.current_match] == line_num;
+            
+            let mut match_count = 0;
+            for (start, part) in line.match_indices(&self.search_term) {
+                let end = start + TextUtils::char_len(part);
+                let style = if is_current_match && match_count == 0 {
+                    Style::default().bg(Constants::CURRENT_MATCH_BG_COLOR).fg(Constants::CURRENT_MATCH_FG_COLOR)
+                } else {
+                    Style::default().bg(Constants::OTHER_MATCH_BG_COLOR).fg(Constants::OTHER_MATCH_FG_COLOR)
+                };
+                
+                ranges.push((start, end, style));
+                match_count += 1;
+            }
+        }
+        
+        if ranges.is_empty() {
+            vec![Span::raw(line)]
+        } else {
+            TextUtils::split_line_into_spans(line, &ranges)
+        }
+    }
+    
     fn draw_status_bar(&self, f: &mut Frame, area: Rect) {
         let status = if self.in_search_mode {
             format!("Search: {}", self.search_term)
@@ -237,352 +380,18 @@ impl Viewer {
         };
 
         let paragraph = Paragraph::new(status)
-            .style(Style::default().bg(Color::Blue).fg(Color::White));
+            .style(Style::default().bg(Constants::STATUS_BAR_BG_COLOR).fg(Constants::STATUS_BAR_FG_COLOR));
         f.render_widget(paragraph, area);
     }
-
-    fn perform_search(&mut self) {
-        if self.search_term.is_empty() {
-            self.search_matches.clear();
-            return;
-        }
-        
-        self.search_matches = self.file_reader.search(&self.search_term);
-        self.current_match = 0;
-        
-        if !self.search_matches.is_empty() {
-            self.current_line = self.search_matches[0].saturating_sub(self.viewport_height / 2);
-        }
-    }
-
-    fn next_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        
-        self.current_match = (self.current_match + 1) % self.search_matches.len();
-        let target_line = self.search_matches[self.current_match];
-        self.current_line = target_line.saturating_sub(self.viewport_height / 2);
-    }
-
-    fn prev_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        
-        self.current_match = if self.current_match == 0 {
-            self.search_matches.len() - 1
-        } else {
-            self.current_match - 1
-        };
-        
-        let target_line = self.search_matches[self.current_match];
-        self.current_line = target_line.saturating_sub(self.viewport_height / 2);
-    }
-
-    fn scroll_up(&mut self) {
-        self.current_line = self.current_line.saturating_sub(1);
-    }
-
-    fn scroll_down(&mut self) {
-        let max_line = self.file_reader.line_count().saturating_sub(self.viewport_height);
-        if self.current_line < max_line {
-            self.current_line += 1;
-        }
-    }
-
-    fn page_up(&mut self) {
-        self.current_line = self.current_line.saturating_sub(self.viewport_height);
-    }
-
-    fn page_down(&mut self) {
-        let max_line = self.file_reader.line_count().saturating_sub(self.viewport_height);
-        self.current_line = (self.current_line + self.viewport_height).min(max_line);
-    }
-
-    fn handle_mouse_down(&mut self, col: u16, row: u16) {
-        // Clear any existing context menu
-        self.context_menu = None;
-        
-        // Convert screen coordinates to line/column
-        if let Some((line, column)) = self.screen_to_text_coords(col, row) {
-            self.selection = Some(Selection {
-                start_line: line,
-                start_col: column,
-                end_line: line,
-                end_col: column,
-            });
-            self.selecting = true;
-        }
-    }
-
-    fn handle_mouse_drag(&mut self, col: u16, row: u16) {
-        if self.selecting {
-            if let Some((line, column)) = self.screen_to_text_coords(col, row) {
-                if let Some(ref mut selection) = self.selection {
-                    selection.end_line = line;
-                    selection.end_col = column;
-                }
-            }
-        }
-    }
-
-    fn handle_mouse_up(&mut self, _col: u16, _row: u16) {
-        self.selecting = false;
-        
-        // Clear selection if it's empty (same start and end position)
-        if let Some(ref selection) = self.selection {
-            if selection.start_line == selection.end_line && selection.start_col == selection.end_col {
-                self.selection = None;
-            }
-        }
-    }
-
-    fn handle_right_click(&mut self, col: u16, row: u16) {
-        // Only show context menu if we have a selection
-        if self.selection.is_some() {
-            self.context_menu = Some(ContextMenu {
-                x: col,
-                y: row,
-                items: vec![
-                    "Copy".to_string(),
-                    "Search".to_string(),
-                ],
-            });
-        }
-    }
-
-    fn screen_to_text_coords(&self, col: u16, row: u16) -> Option<(usize, usize)> {
-        // Account for borders and line numbers
-        if row == 0 || col < 7 {
-            return None; // Header or line number area
-        }
-        
-        let text_row = (row - 1) as usize;
-        let text_col = (col - 7) as usize; // Account for line number width
-        
-        if text_row >= self.viewport_height {
-            return None;
-        }
-        
-        let line_num = self.current_line + text_row;
-        if line_num >= self.file_reader.line_count() {
-            return None;
-        }
-        
-        Some((line_num, text_col))
-    }
-
-    fn is_mouse_in_menu(&self, col: u16, row: u16) -> bool {
-        if let Some(ref menu) = self.context_menu {
-            let menu_width = 10;
-            let menu_height = menu.items.len() as u16; // No borders
-            
-            col >= menu.x && col < menu.x + menu_width &&
-            row >= menu.y && row < menu.y + menu_height
-        } else {
-            false
-        }
-    }
-
-    fn handle_menu_click(&mut self, _col: u16, row: u16) {
-        if let Some(ref menu) = self.context_menu {
-            // No border, so direct calculation
-            let item_index = (row - menu.y) as usize;
-            if item_index < menu.items.len() {
-                match item_index {
-                    0 => self.copy_selection(),
-                    1 => self.search_selection(),
-                    _ => {}
-                }
-            }
-        }
-        self.context_menu = None;
-    }
-
-    fn copy_selection(&mut self) {
-        if let Some(selected_text) = self.get_selected_text() {
-            if let Ok(mut ctx) = ClipboardContext::new() {
-                let _ = ctx.set_contents(selected_text);
-            }
-        }
-    }
-
-    fn search_selection(&mut self) {
-        if let Some(selected_text) = self.get_selected_text() {
-            // Only search if it's a single line
-            if !selected_text.contains('\n') {
-                self.search_term = selected_text;
-                self.perform_search();
-            }
-        }
-    }
-
-    fn get_selected_text(&self) -> Option<String> {
-        if let Some(ref selection) = self.selection {
-            let mut result = String::new();
-            
-            let (start_line, start_col, end_line, end_col) = self.normalize_selection(selection);
-            
-            if start_line == end_line {
-                // Single line selection
-                if let Some(line) = self.file_reader.get_line(start_line) {
-                    let chars: Vec<char> = line.chars().collect();
-                    let char_len = chars.len();
-                    let safe_start = start_col.min(char_len);
-                    let safe_end = end_col.min(char_len);
-                    
-                    if safe_start < char_len && safe_start < safe_end {
-                        result = chars[safe_start..safe_end].iter().collect();
-                    }
-                }
-            } else {
-                // Multi-line selection
-                for line_num in start_line..=end_line {
-                    if let Some(line) = self.file_reader.get_line(line_num) {
-                        let chars: Vec<char> = line.chars().collect();
-                        let char_len = chars.len();
-                        
-                        if line_num == start_line {
-                            let safe_start = start_col.min(char_len);
-                            if safe_start < char_len {
-                                let text: String = chars[safe_start..].iter().collect();
-                                result.push_str(&text);
-                            }
-                        } else if line_num == end_line {
-                            let safe_end = end_col.min(char_len);
-                            if safe_end > 0 {
-                                let text: String = chars[..safe_end].iter().collect();
-                                result.push_str(&text);
-                            }
-                        } else {
-                            result.push_str(line);
-                        }
-                        
-                        if line_num != end_line {
-                            result.push('\n');
-                        }
-                    }
-                }
-            }
-            
-            if result.is_empty() {
-                None
-            } else {
-                Some(result)
-            }
-        } else {
-            None
-        }
-    }
-
-    fn normalize_selection(&self, selection: &Selection) -> (usize, usize, usize, usize) {
-        let (start_line, start_col, end_line, end_col) = if selection.start_line < selection.end_line ||
-            (selection.start_line == selection.end_line && selection.start_col <= selection.end_col) {
-            (selection.start_line, selection.start_col, selection.end_line, selection.end_col)
-        } else {
-            (selection.end_line, selection.end_col, selection.start_line, selection.start_col)
-        };
-        
-        (start_line, start_col, end_line, end_col)
-    }
-
-    fn apply_selection_highlighting<'a>(&self, line: &'a str, line_num: usize) -> Vec<Span<'a>> {
-        if let Some(ref selection) = self.selection {
-            let (start_line, start_col, end_line, end_col) = self.normalize_selection(selection);
-            
-            if line_num >= start_line && line_num <= end_line {
-                let mut result = Vec::new();
-                let chars: Vec<char> = line.chars().collect();
-                let char_len = chars.len();
-                
-                let sel_start = if line_num == start_line { start_col.min(char_len) } else { 0 };
-                let sel_end = if line_num == end_line { end_col.min(char_len) } else { char_len };
-                
-                // Ensure valid range
-                if sel_start > sel_end {
-                    return vec![Span::raw(line)];
-                }
-                
-                // Before selection
-                if sel_start > 0 {
-                    let before_text: String = chars[0..sel_start].iter().collect();
-                    result.push(Span::raw(before_text));
-                }
-                
-                // Selection
-                if sel_start < char_len && sel_start < sel_end {
-                    let selected_text: String = chars[sel_start..sel_end].iter().collect();
-                    result.push(Span::styled(
-                        selected_text,
-                        Style::default().bg(Color::Blue).fg(Color::White)
-                    ));
-                }
-                
-                // After selection
-                if sel_end < char_len {
-                    let after_text: String = chars[sel_end..].iter().collect();
-                    result.push(Span::raw(after_text));
-                }
-                
-                result
-            } else {
-                vec![Span::raw(line)]
-            }
-        } else {
-            vec![Span::raw(line)]
-        }
-    }
-
-    fn apply_search_highlighting_to_spans<'a>(&self, spans: Vec<Span<'a>>, term: &str, line_num: usize) -> Vec<Span<'a>> {
-        let mut result = Vec::new();
-        
-        let is_current_match_line = !self.search_matches.is_empty() && 
-            self.search_matches[self.current_match] == line_num;
-        
-        for span in spans {
-            if span.content.contains(term) {
-                let content_str = span.content.to_string();
-                let mut last_end = 0;
-                let mut match_count = 0;
-                
-                for (start, part) in content_str.match_indices(term) {
-                    if start > last_end {
-                        result.push(Span::styled(content_str[last_end..start].to_string(), span.style));
-                    }
-                    
-                    let search_style = if is_current_match_line && match_count == 0 {
-                        Style::default().bg(Color::Cyan).fg(Color::Black)
-                    } else {
-                        Style::default().bg(Color::DarkGray).fg(Color::White)
-                    };
-                    
-                    result.push(Span::styled(part.to_string(), search_style));
-                    last_end = start + part.len();
-                    match_count += 1;
-                }
-                
-                if last_end < content_str.len() {
-                    result.push(Span::styled(content_str[last_end..].to_string(), span.style));
-                }
-            } else {
-                result.push(span);
-            }
-        }
-        
-        result
-    }
-
+    
     fn draw_context_menu(&self, f: &mut Frame, menu: &ContextMenu) {
-        let menu_width = 10;
         let menu_height = menu.items.len() as u16;
         
-        // Ensure menu fits within screen bounds
         let screen_width = f.size().width;
         let screen_height = f.size().height;
         
-        let menu_x = if menu.x + menu_width > screen_width {
-            screen_width.saturating_sub(menu_width)
+        let menu_x = if menu.x + Constants::CONTEXT_MENU_WIDTH > screen_width {
+            screen_width.saturating_sub(Constants::CONTEXT_MENU_WIDTH)
         } else {
             menu.x
         };
@@ -593,32 +402,28 @@ impl Viewer {
             menu.y
         };
         
-        // First, draw a solid background rectangle to cover any underlying text
         let menu_area = Rect {
             x: menu_x,
             y: menu_y,
-            width: menu_width,
+            width: Constants::CONTEXT_MENU_WIDTH,
             height: menu_height,
         };
         
-        // Clear the background with a solid color
         let background = Block::default()
-            .style(Style::default().bg(Color::DarkGray));
+            .style(Style::default().bg(Constants::CONTEXT_MENU_BG_COLOR));
         f.render_widget(background, menu_area);
         
-        // Then draw each menu item on top
         for (i, item) in menu.items.iter().enumerate() {
             let item_area = Rect {
                 x: menu_x,
                 y: menu_y + i as u16,
-                width: menu_width,
+                width: Constants::CONTEXT_MENU_WIDTH,
                 height: 1,
             };
             
-            // Create a fully filled background for each item
-            let item_text = format!("{:<width$}", item, width = menu_width as usize);
+            let item_text = format!("{:<width$}", item, width = Constants::CONTEXT_MENU_WIDTH as usize);
             let item_paragraph = Paragraph::new(item_text)
-                .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+                .style(Style::default().bg(Constants::CONTEXT_MENU_BG_COLOR).fg(Constants::CONTEXT_MENU_FG_COLOR));
             
             f.render_widget(item_paragraph, item_area);
         }
