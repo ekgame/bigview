@@ -1,5 +1,5 @@
 use crate::file_reader::FileReader;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -54,6 +54,7 @@ impl Viewer {
                         self.search_term.push(c);
                     }
                     (false, KeyCode::Char('q')) => break,
+                    (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     (false, KeyCode::Char('/')) => {
                         self.in_search_mode = true;
                         self.search_term.clear();
