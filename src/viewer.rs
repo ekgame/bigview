@@ -53,6 +53,7 @@ pub struct Viewer {
     progress_value: f64,
     progress_message: String,
     search_requested: bool,
+    search_cancelled: bool,
     last_search_term: String,
     search_textarea: TextArea<'static>,
 }
@@ -79,6 +80,7 @@ impl Viewer {
             progress_value: 0.0,
             progress_message: String::new(),
             search_requested: false,
+            search_cancelled: false,
             last_search_term: String::new(),
             search_textarea,
         }
@@ -111,6 +113,7 @@ impl Viewer {
             progress_value: 0.0,
             progress_message: String::new(),
             search_requested: false,
+            search_cancelled: false,
             last_search_term: String::new(),
             search_textarea,
         }
@@ -164,6 +167,15 @@ impl Viewer {
     
     pub fn request_search(&mut self) {
         self.search_requested = true;
+        self.search_cancelled = false;
+    }
+    
+    pub fn cancel_search(&mut self) {
+        self.search_cancelled = true;
+    }
+    
+    pub fn is_search_cancelled(&self) -> bool {
+        self.search_cancelled
     }
     
     pub fn clear_search(&mut self) {
@@ -172,6 +184,7 @@ impl Viewer {
         self.search_matches.clear();
         self.current_match = 0;
         self.search_requested = false;
+        self.search_cancelled = false;
         self.last_search_term.clear();
     }
     
@@ -229,7 +242,7 @@ impl Viewer {
         }
         
         // Show initial progress
-        self.show_progress(0.0, "Searching...");
+        self.show_progress(0.0, "Searching... (ESC to cancel)");
         
         // Perform search with progress tracking
         self.last_search_term = search_term.clone();
@@ -275,6 +288,20 @@ impl Viewer {
             // Update progress bar while searching
             let mut last_update = std::time::Instant::now();
             loop {
+                // Check for keyboard input to allow cancellation
+                if crossterm::event::poll(std::time::Duration::from_millis(10))? {
+                    if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+                        if key.code == crossterm::event::KeyCode::Esc {
+                            // Cancel search and return to search mode with preserved text
+                            self.search_cancelled = true;
+                            self.in_search_mode = true;  // Enter search mode without clearing text
+                            self.hide_progress();
+                            self.search_requested = false;
+                            return Ok(());
+                        }
+                    }
+                }
+                
                 // Check for progress updates
                 match progress_rx.try_recv() {
                     Ok((progress, message)) => {
