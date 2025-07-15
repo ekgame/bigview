@@ -19,36 +19,85 @@ impl TextUtils {
         chars[safe_start..safe_end].iter().collect()
     }
     
-    /// Split a line into spans based on character ranges
+    /// Split a line into spans based on character ranges, handling overlapping ranges
     pub fn split_line_into_spans<'a>(line: &'a str, ranges: &[(usize, usize, Style)]) -> Vec<Span<'a>> {
         let chars: Vec<char> = line.chars().collect();
         let char_len = chars.len();
         let mut spans = Vec::new();
-        let mut last_end = 0;
         
-        for &(start, end, style) in ranges {
+        if ranges.is_empty() {
+            return vec![Span::raw(line)];
+        }
+        
+        // Sort ranges by start position
+        let mut sorted_ranges = ranges.to_vec();
+        sorted_ranges.sort_by(|a, b| a.0.cmp(&b.0));
+        
+        // Create a priority map where later styles have higher priority
+        let mut style_map: Vec<(usize, usize, Style)> = Vec::new();
+        
+        // Process ranges to handle overlaps by giving priority to later ranges
+        for &(start, end, style) in &sorted_ranges {
             let safe_start = start.min(char_len);
             let safe_end = end.min(char_len);
             
-            // Add text before this range
-            if safe_start > last_end {
-                let text: String = chars[last_end..safe_start].iter().collect();
-                spans.push(Span::raw(text));
-            }
-            
-            // Add the styled range
             if safe_start < safe_end {
-                let text: String = chars[safe_start..safe_end].iter().collect();
-                spans.push(Span::styled(text, style));
+                style_map.push((safe_start, safe_end, style));
             }
-            
-            last_end = safe_end;
         }
         
-        // Add remaining text
-        if last_end < char_len {
-            let text: String = chars[last_end..].iter().collect();
-            spans.push(Span::raw(text));
+        // Create segments with their styles
+        let mut segments: Vec<(usize, usize, Option<Style>)> = Vec::new();
+        let mut events: Vec<(usize, bool, Style)> = Vec::new(); // (position, is_start, style)
+        
+        // Create start/end events
+        for &(start, end, style) in &style_map {
+            events.push((start, true, style));
+            events.push((end, false, style));
+        }
+        
+        // Sort events by position, with end events before start events at same position
+        events.sort_by(|a, b| {
+            match a.0.cmp(&b.0) {
+                std::cmp::Ordering::Equal => a.1.cmp(&b.1), // false (end) before true (start)
+                other => other,
+            }
+        });
+        
+        let mut active_styles: Vec<Style> = Vec::new();
+        let mut last_pos = 0;
+        
+        for (pos, is_start, style) in events {
+            // Add segment before this event
+            if pos > last_pos {
+                let current_style = active_styles.last().copied();
+                segments.push((last_pos, pos, current_style));
+            }
+            
+            if is_start {
+                active_styles.push(style);
+            } else {
+                active_styles.retain(|&s| s != style);
+            }
+            
+            last_pos = pos;
+        }
+        
+        // Add final segment
+        if last_pos < char_len {
+            segments.push((last_pos, char_len, None));
+        }
+        
+        // Convert segments to spans
+        for (start, end, style_opt) in segments {
+            if start < end {
+                let text: String = chars[start..end].iter().collect();
+                if let Some(style) = style_opt {
+                    spans.push(Span::styled(text, style));
+                } else {
+                    spans.push(Span::raw(text));
+                }
+            }
         }
         
         spans
