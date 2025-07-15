@@ -4,6 +4,8 @@ use crate::{
     text_utils::TextUtils,
     constants::Constants,
 };
+use tui_textarea::TextArea;
+use clipboard::ClipboardProvider;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
@@ -40,7 +42,6 @@ pub enum ViewerAction {
 pub struct Viewer {
     file_reader: FileReader,
     current_line: usize,
-    search_term: String,
     search_matches: Vec<usize>,
     current_match: usize,
     in_search_mode: bool,
@@ -53,14 +54,20 @@ pub struct Viewer {
     progress_message: String,
     search_requested: bool,
     last_search_term: String,
+    search_textarea: TextArea<'static>,
 }
 
 impl Viewer {
     pub fn new(file_reader: FileReader) -> Self {
+        let mut search_textarea = TextArea::default();
+        search_textarea.set_cursor_line_style(Style::default());
+        search_textarea.set_style(Style::default().bg(ratatui::style::Color::Blue));
+        search_textarea.set_line_number_style(Style::default());
+        search_textarea.remove_line_number();
+        
         Self {
             file_reader,
             current_line: 0,
-            search_term: String::new(),
             search_matches: Vec::new(),
             current_match: 0,
             in_search_mode: false,
@@ -73,6 +80,7 @@ impl Viewer {
             progress_message: String::new(),
             search_requested: false,
             last_search_term: String::new(),
+            search_textarea,
         }
     }
     
@@ -83,10 +91,15 @@ impl Viewer {
             FileReader::new_with_progress(".", None).unwrap()
         });
         
+        let mut search_textarea = TextArea::default();
+        search_textarea.set_cursor_line_style(Style::default());
+        search_textarea.set_style(Style::default().bg(ratatui::style::Color::Blue));
+        search_textarea.set_line_number_style(Style::default());
+        search_textarea.remove_line_number();
+        
         Self {
             file_reader: empty_file_reader,
             current_line: 0,
-            search_term: String::new(),
             search_matches: Vec::new(),
             current_match: 0,
             in_search_mode: false,
@@ -99,6 +112,7 @@ impl Viewer {
             progress_message: String::new(),
             search_requested: false,
             last_search_term: String::new(),
+            search_textarea,
         }
     }
     
@@ -153,7 +167,8 @@ impl Viewer {
     }
     
     pub fn clear_search(&mut self) {
-        self.search_term.clear();
+        self.search_textarea.delete_line_by_head();
+        self.search_textarea.delete_line_by_end();
         self.search_matches.clear();
         self.current_match = 0;
         self.search_requested = false;
@@ -176,27 +191,39 @@ impl Viewer {
     // Search operations
     pub fn enter_search_mode(&mut self) {
         self.in_search_mode = true;
-        self.search_term.clear();
+        self.search_textarea.delete_line_by_head();
+        self.search_textarea.delete_line_by_end();
     }
     
     pub fn exit_search_mode(&mut self) {
         self.in_search_mode = false;
     }
     
-    pub fn add_to_search_term(&mut self, c: char) {
-        self.search_term.push(c);
+    pub fn get_search_term(&self) -> String {
+        self.search_textarea.lines()[0].clone()
     }
     
-    pub fn add_to_search_term_str(&mut self, s: &str) {
-        self.search_term.push_str(s);
-    }
-    
-    pub fn backspace_search_term(&mut self) {
-        self.search_term.pop();
+    pub fn handle_search_input(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        // Handle Ctrl+V for paste
+        if key.code == crossterm::event::KeyCode::Char('v') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+            if let Ok(mut ctx) = clipboard::ClipboardContext::new() {
+                if let Ok(content) = ctx.get_contents() {
+                    // Only paste if clipboard contains text (no newlines)
+                    if !content.contains('\n') && !content.contains('\r') {
+                        self.search_textarea.insert_str(&content);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        // Let TextArea handle all other input
+        self.search_textarea.input(key)
     }
     
     pub fn perform_search_with_progress(&mut self) {
-        if self.search_term.is_empty() {
+        let search_term = self.get_search_term();
+        if search_term.is_empty() {
             self.search_matches.clear();
             return;
         }
@@ -205,7 +232,6 @@ impl Viewer {
         self.show_progress(0.0, "Searching...");
         
         // Perform search with progress tracking
-        let search_term = self.search_term.clone();
         self.last_search_term = search_term.clone();
         self.search_matches = self.file_reader.search_with_progress(&search_term, None);
         self.current_match = 0;
@@ -218,7 +244,8 @@ impl Viewer {
     }
     
     pub fn perform_search_with_ui_progress(&mut self, terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>) -> Result<(), std::io::Error> {
-        if self.search_term.is_empty() {
+        let search_term = self.get_search_term();
+        if search_term.is_empty() {
             self.search_matches.clear();
             self.search_requested = false;
             return Ok(());
@@ -229,7 +256,6 @@ impl Viewer {
         if total_lines > 100_000 { // Show progress for files with more than 100k lines
             // Create a channel for progress updates
             let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-            let search_term = self.search_term.clone();
             let search_term_for_thread = search_term.clone();
             
             // Create a thread-safe search context
@@ -470,7 +496,9 @@ impl Viewer {
         if let Some(ref selection) = self.selection {
             if let Some(text) = selection.get_text(&self.file_reader) {
                 if !text.contains('\n') {
-                    self.search_term = text;
+                    self.search_textarea.delete_line_by_head();
+                    self.search_textarea.delete_line_by_end();
+                    self.search_textarea.insert_str(&text);
                     self.request_search();
                 }
             }
@@ -519,12 +547,13 @@ impl Viewer {
         }
         
         // Add search highlighting
-        if !self.search_term.is_empty() && line.contains(&self.search_term) {
+        let search_term = self.get_search_term();
+        if !search_term.is_empty() && line.contains(&search_term) {
             let is_current_match = !self.search_matches.is_empty() && 
                 self.search_matches[self.current_match] == line_num;
             
             let mut match_count = 0;
-            for (start, part) in line.match_indices(&self.search_term) {
+            for (start, part) in line.match_indices(&search_term) {
                 let end = start + TextUtils::char_len(part);
                 let style = if is_current_match && match_count == 0 {
                     Style::default().bg(Constants::CURRENT_MATCH_BG_COLOR).fg(Constants::CURRENT_MATCH_FG_COLOR)
@@ -555,9 +584,17 @@ impl Viewer {
     }
     
     fn draw_status_bar(&self, f: &mut Frame, area: Rect) {
-        let status = if self.in_search_mode {
-            format!("Search: {}", self.search_term)
+        if self.in_search_mode {
+            // In search mode, show the TextArea for input
+            let search_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+            };
+            f.render_widget(self.search_textarea.widget(), search_area);
         } else {
+            // Normal mode, show status information
             let total_lines = self.file_reader.line_count();
             let current_pos = self.current_line + 1;
             let match_info = if !self.search_matches.is_empty() {
@@ -572,13 +609,13 @@ impl Viewer {
             } else {
                 ""
             };
-            format!("Line {}/{} | q: quit, /: search, n: next match{}{}", 
-                   current_pos, total_lines, match_info, esc_hint)
-        };
+            let status = format!("Line {}/{} | q: quit, /: search, n: next match{}{}", 
+                               current_pos, total_lines, match_info, esc_hint);
 
-        let paragraph = Paragraph::new(status)
-            .style(Style::default().bg(Constants::STATUS_BAR_BG_COLOR).fg(Constants::STATUS_BAR_FG_COLOR));
-        f.render_widget(paragraph, area);
+            let paragraph = Paragraph::new(status)
+                .style(Style::default().bg(Constants::STATUS_BAR_BG_COLOR).fg(Constants::STATUS_BAR_FG_COLOR));
+            f.render_widget(paragraph, area);
+        }
     }
     
     fn draw_context_menu(&self, f: &mut Frame, menu: &ContextMenu) {

@@ -1,5 +1,4 @@
 use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use clipboard::{ClipboardContext, ClipboardProvider};
 use crate::viewer::{Viewer, ViewerAction};
 
 pub struct EventHandler;
@@ -34,19 +33,11 @@ impl EventHandler {
                 viewer.exit_search_mode();
                 ViewerAction::None
             }
-            KeyCode::Backspace => {
-                viewer.backspace_search_term();
+            _ => {
+                // Let TextArea handle all other input including backspace, typing, cursor movement, etc.
+                viewer.handle_search_input(key);
                 ViewerAction::None
             }
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Self::paste_clipboard_to_search(viewer);
-                ViewerAction::None
-            }
-            KeyCode::Char(c) => {
-                viewer.add_to_search_term(c);
-                ViewerAction::None
-            }
-            _ => ViewerAction::None,
         }
     }
     
@@ -160,13 +151,4 @@ impl EventHandler {
         }
     }
     
-    fn paste_clipboard_to_search(viewer: &mut Viewer) {
-        if let Ok(mut ctx) = ClipboardContext::new() {
-            if let Ok(content) = ctx.get_contents() {
-                if !content.contains('\n') && !content.contains('\r') {
-                    viewer.add_to_search_term_str(&content);
-                }
-            }
-        }
-    }
 }
