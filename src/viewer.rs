@@ -1,5 +1,5 @@
 use crate::file_reader::FileReader;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -37,54 +37,74 @@ impl Viewer {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
-            if let Event::Key(key) = event::read()? {
-                match (self.in_search_mode, key.code) {
-                    (true, KeyCode::Esc) => {
-                        self.in_search_mode = false;
-                        self.search_term.clear();
+            match event::read()? {
+                Event::Key(key) => {
+                    match (self.in_search_mode, key.code) {
+                        (true, KeyCode::Esc) => {
+                            self.in_search_mode = false;
+                            self.search_term.clear();
+                        }
+                        (true, KeyCode::Enter) => {
+                            self.perform_search();
+                            self.in_search_mode = false;
+                        }
+                        (true, KeyCode::Backspace) => {
+                            self.search_term.pop();
+                        }
+                        (true, KeyCode::Char(c)) => {
+                            self.search_term.push(c);
+                        }
+                        (false, KeyCode::Char('q')) => break,
+                        (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        (false, KeyCode::Char('/')) => {
+                            self.in_search_mode = true;
+                            self.search_term.clear();
+                        }
+                        (false, KeyCode::Char('n')) => {
+                            self.next_match();
+                        }
+                        (false, KeyCode::Char('N')) => {
+                            self.prev_match();
+                        }
+                        (false, KeyCode::Up) => {
+                            self.scroll_up();
+                        }
+                        (false, KeyCode::Down) => {
+                            self.scroll_down();
+                        }
+                        (false, KeyCode::PageUp) => {
+                            self.page_up();
+                        }
+                        (false, KeyCode::PageDown) => {
+                            self.page_down();
+                        }
+                        (false, KeyCode::Home) => {
+                            self.current_line = 0;
+                        }
+                        (false, KeyCode::End) => {
+                            self.current_line = self.file_reader.line_count().saturating_sub(1);
+                        }
+                        _ => {}
                     }
-                    (true, KeyCode::Enter) => {
-                        self.perform_search();
-                        self.in_search_mode = false;
-                    }
-                    (true, KeyCode::Backspace) => {
-                        self.search_term.pop();
-                    }
-                    (true, KeyCode::Char(c)) => {
-                        self.search_term.push(c);
-                    }
-                    (false, KeyCode::Char('q')) => break,
-                    (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                    (false, KeyCode::Char('/')) => {
-                        self.in_search_mode = true;
-                        self.search_term.clear();
-                    }
-                    (false, KeyCode::Char('n')) => {
-                        self.next_match();
-                    }
-                    (false, KeyCode::Char('N')) => {
-                        self.prev_match();
-                    }
-                    (false, KeyCode::Up) => {
-                        self.scroll_up();
-                    }
-                    (false, KeyCode::Down) => {
-                        self.scroll_down();
-                    }
-                    (false, KeyCode::PageUp) => {
-                        self.page_up();
-                    }
-                    (false, KeyCode::PageDown) => {
-                        self.page_down();
-                    }
-                    (false, KeyCode::Home) => {
-                        self.current_line = 0;
-                    }
-                    (false, KeyCode::End) => {
-                        self.current_line = self.file_reader.line_count().saturating_sub(1);
-                    }
-                    _ => {}
                 }
+                Event::Mouse(mouse) => {
+                    if !self.in_search_mode {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                for _ in 0..3 {
+                                    self.scroll_up();
+                                }
+                            }
+                            MouseEventKind::ScrollDown => {
+                                for _ in 0..3 {
+                                    self.scroll_down();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
