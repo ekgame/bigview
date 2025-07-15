@@ -4,6 +4,7 @@ mod text_utils;
 mod selection;
 mod constants;
 mod viewer;
+mod formatter;
 
 use anyhow::Result;
 use clap::Parser;
@@ -13,6 +14,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use file_reader::{FileReader, ProgressCallback};
+use formatter::FileFormatter;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::sync::mpsc;
@@ -32,6 +34,9 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     
+    // Format file if needed (JSON/XML)
+    let file_path = FileFormatter::format_if_needed(&args.file_path)?;
+    
     // Try to setup terminal, but if it fails, just load the file without UI
     let terminal_setup = enable_raw_mode().and_then(|_| {
         let mut stdout = io::stdout();
@@ -43,7 +48,7 @@ fn main() -> Result<()> {
     match terminal_setup {
         Ok(mut terminal) => {
             // Run with UI
-            let result = load_file_with_progress(&args.file_path, &mut terminal);
+            let result = load_file_with_progress(&file_path, &mut terminal);
             
             // Restore terminal
             disable_raw_mode()?;

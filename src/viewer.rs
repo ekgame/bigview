@@ -170,14 +170,6 @@ impl Viewer {
         self.search_cancelled = false;
     }
     
-    pub fn cancel_search(&mut self) {
-        self.search_cancelled = true;
-    }
-    
-    pub fn is_search_cancelled(&self) -> bool {
-        self.search_cancelled
-    }
-    
     pub fn clear_search(&mut self) {
         self.search_textarea.delete_line_by_head();
         self.search_textarea.delete_line_by_end();
