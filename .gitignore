@@ -4,6 +4,9 @@
 
 # Test files
 test_*.txt
+test_data.*
+*_formatted.*
+create_test_files*.py
 
 # IDE
 .vscode/
