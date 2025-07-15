@@ -146,10 +146,20 @@ fn run_viewer(viewer: &mut Viewer, terminal: &mut Terminal<CrosstermBackend<std:
     loop {
         terminal.draw(|f| viewer.draw(f))?;
         
-        let event = crossterm::event::read()?;
-        match EventHandler::handle_event(viewer, event) {
-            ViewerAction::Quit => break,
-            ViewerAction::None => continue,
+        // Check if a search was requested
+        if viewer.has_search_requested() {
+            if let Err(e) = viewer.perform_search_with_ui_progress(terminal) {
+                eprintln!("Search error: {}", e);
+            }
+        }
+        
+        // Check for events with a timeout to allow search processing
+        if crossterm::event::poll(Duration::from_millis(100))? {
+            let event = crossterm::event::read()?;
+            match EventHandler::handle_event(viewer, event) {
+                ViewerAction::Quit => break,
+                ViewerAction::None => continue,
+            }
         }
     }
     Ok(())

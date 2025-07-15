@@ -30,7 +30,7 @@ impl EventHandler {
                 ViewerAction::None
             }
             KeyCode::Enter => {
-                viewer.perform_search_with_progress();
+                viewer.request_search();
                 viewer.exit_search_mode();
                 ViewerAction::None
             }

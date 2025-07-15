@@ -51,6 +51,7 @@ pub struct Viewer {
     progress_visible: bool,
     progress_value: f64,
     progress_message: String,
+    search_requested: bool,
 }
 
 impl Viewer {
@@ -69,6 +70,7 @@ impl Viewer {
             progress_visible: false,
             progress_value: 0.0,
             progress_message: String::new(),
+            search_requested: false,
         }
     }
     
@@ -93,6 +95,7 @@ impl Viewer {
             progress_visible: false,
             progress_value: 0.0,
             progress_message: String::new(),
+            search_requested: false,
         }
     }
     
@@ -136,6 +139,14 @@ impl Viewer {
     
     pub fn has_context_menu(&self) -> bool {
         self.context_menu.is_some()
+    }
+    
+    pub fn has_search_requested(&self) -> bool {
+        self.search_requested
+    }
+    
+    pub fn request_search(&mut self) {
+        self.search_requested = true;
     }
     
     // Progress bar operations
@@ -192,6 +203,95 @@ impl Viewer {
         }
         
         self.hide_progress();
+    }
+    
+    pub fn perform_search_with_ui_progress(&mut self, terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>) -> Result<(), std::io::Error> {
+        if self.search_term.is_empty() {
+            self.search_matches.clear();
+            self.search_requested = false;
+            return Ok(());
+        }
+        
+        // Only show progress for searches that might take a while
+        let total_lines = self.file_reader.line_count();
+        if total_lines > 100_000 { // Show progress for files with more than 100k lines
+            // Create a channel for progress updates
+            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+            let search_term = self.search_term.clone();
+            
+            // Create a thread-safe search context
+            let search_context = self.file_reader.create_search_context();
+            
+            let search_thread = std::thread::spawn(move || {
+                let progress_callback: crate::file_reader::ProgressCallback = Box::new(move |progress, message| {
+                    let _ = progress_tx.send((progress, message.to_string()));
+                });
+                
+                search_context.search_with_progress(&search_term, Some(progress_callback))
+            });
+            
+            // Show initial progress
+            self.show_progress(0.0, "Searching...");
+            
+            // Update progress bar while searching
+            let mut last_update = std::time::Instant::now();
+            loop {
+                // Check for progress updates
+                match progress_rx.try_recv() {
+                    Ok((progress, message)) => {
+                        self.show_progress(progress, &message);
+                        
+                        // Update UI every 200ms to reduce overhead
+                        if last_update.elapsed() >= std::time::Duration::from_millis(200) {
+                            terminal.draw(|f| self.draw(f))?;
+                            last_update = std::time::Instant::now();
+                        }
+                        
+                        if progress >= 1.0 {
+                            // Final update
+                            terminal.draw(|f| self.draw(f))?;
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // No progress update, continue
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        // Search thread finished
+                        break;
+                    }
+                }
+                
+                // Small delay to prevent excessive CPU usage
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            
+            // Wait for search thread to complete and get result
+            match search_thread.join() {
+                Ok(results) => {
+                    self.search_matches = results;
+                    self.current_match = 0;
+                    
+                    if !self.search_matches.is_empty() {
+                        self.current_line = self.search_matches[0].saturating_sub(self.viewport_height / 2);
+                    }
+                    
+                    self.hide_progress();
+                    self.search_requested = false;
+                    Ok(())
+                }
+                Err(_) => {
+                    self.hide_progress();
+                    self.search_requested = false;
+                    Err(std::io::Error::new(std::io::ErrorKind::Other, "Search thread panicked"))
+                }
+            }
+        } else {
+            // Small file, search directly without progress
+            self.perform_search_with_progress();
+            self.search_requested = false;
+            Ok(())
+        }
     }
     
     pub fn next_match(&mut self) {
@@ -357,7 +457,7 @@ impl Viewer {
             if let Some(text) = selection.get_text(&self.file_reader) {
                 if !text.contains('\n') {
                     self.search_term = text;
-                    self.perform_search_with_progress();
+                    self.request_search();
                 }
             }
         }

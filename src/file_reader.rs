@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 
 pub type ProgressCallback = Box<dyn Fn(f64, &str) + Send + Sync>;
 
 pub struct FileReader {
-    mmap: Mmap,
+    mmap: Arc<Mmap>,
     lines: Vec<usize>, // Line start positions
 }
 
@@ -24,7 +25,7 @@ impl FileReader {
         let _ = std::fs::remove_file(&temp_file);
         
         Ok(FileReader {
-            mmap: empty_mmap,
+            mmap: Arc::new(empty_mmap),
             lines: vec![0],
         })
     }
@@ -33,8 +34,8 @@ impl FileReader {
         let file = File::open(&path)
             .with_context(|| format!("Failed to open file: {}", path.as_ref().display()))?;
         
-        let mmap = unsafe { Mmap::map(&file) }
-            .with_context(|| "Failed to memory-map file")?;
+        let mmap = Arc::new(unsafe { Mmap::map(&file) }
+            .with_context(|| "Failed to memory-map file")?);
         
         // Build line index for fast line-based navigation
         let mut lines = vec![0]; // First line starts at position 0
@@ -138,4 +139,74 @@ impl FileReader {
         matches
     }
     
+    /// Create a search context that can be safely sent to another thread
+    pub fn create_search_context(&self) -> SearchContext {
+        SearchContext {
+            mmap: self.mmap.clone(),
+            lines: self.lines.clone(),
+        }
+    }
+    
+}
+
+/// A thread-safe context for searching that can be sent between threads
+pub struct SearchContext {
+    mmap: Arc<Mmap>,
+    lines: Vec<usize>,
+}
+
+impl SearchContext {
+    pub fn search_with_progress(&self, needle: &str, progress_callback: Option<ProgressCallback>) -> Vec<usize> {
+        let mut matches = Vec::new();
+        let total_lines = self.lines.len();
+        let mut last_progress_line = 0;
+        let progress_interval = total_lines / 20; // Update every 5%
+        
+        if let Some(ref callback) = progress_callback {
+            callback(0.0, "Searching...");
+        }
+        
+        for (line_num, _) in self.lines.iter().enumerate() {
+            if let Some(line) = self.get_line(line_num) {
+                if line.contains(needle) {
+                    matches.push(line_num);
+                }
+            }
+            
+            // Report progress every 5% to reduce overhead
+            if let Some(ref callback) = progress_callback {
+                if line_num > last_progress_line + progress_interval {
+                    let progress = line_num as f64 / total_lines as f64;
+                    callback(progress, "Searching...");
+                    last_progress_line = line_num;
+                }
+            }
+        }
+        
+        if let Some(ref callback) = progress_callback {
+            callback(1.0, "Search complete");
+        }
+        
+        matches
+    }
+    
+    fn get_line(&self, line_num: usize) -> Option<&str> {
+        if line_num >= self.lines.len() {
+            return None;
+        }
+        
+        let start = self.lines[line_num];
+        let end = if line_num + 1 < self.lines.len() {
+            self.lines[line_num + 1].saturating_sub(1) // Exclude newline
+        } else {
+            self.mmap.len()
+        };
+        
+        if start > end || start >= self.mmap.len() {
+            return None;
+        }
+        
+        let line_bytes = &self.mmap[start..end];
+        std::str::from_utf8(line_bytes).ok()
+    }
 }
