@@ -52,6 +52,7 @@ pub struct Viewer {
     progress_value: f64,
     progress_message: String,
     search_requested: bool,
+    last_search_term: String,
 }
 
 impl Viewer {
@@ -71,6 +72,7 @@ impl Viewer {
             progress_value: 0.0,
             progress_message: String::new(),
             search_requested: false,
+            last_search_term: String::new(),
         }
     }
     
@@ -96,6 +98,7 @@ impl Viewer {
             progress_value: 0.0,
             progress_message: String::new(),
             search_requested: false,
+            last_search_term: String::new(),
         }
     }
     
@@ -154,6 +157,7 @@ impl Viewer {
         self.search_matches.clear();
         self.current_match = 0;
         self.search_requested = false;
+        self.last_search_term.clear();
     }
     
     // Progress bar operations
@@ -202,6 +206,7 @@ impl Viewer {
         
         // Perform search with progress tracking
         let search_term = self.search_term.clone();
+        self.last_search_term = search_term.clone();
         self.search_matches = self.file_reader.search_with_progress(&search_term, None);
         self.current_match = 0;
         
@@ -225,6 +230,7 @@ impl Viewer {
             // Create a channel for progress updates
             let (progress_tx, progress_rx) = std::sync::mpsc::channel();
             let search_term = self.search_term.clone();
+            let search_term_for_thread = search_term.clone();
             
             // Create a thread-safe search context
             let search_context = self.file_reader.create_search_context();
@@ -234,7 +240,7 @@ impl Viewer {
                     let _ = progress_tx.send((progress, message.to_string()));
                 });
                 
-                search_context.search_with_progress(&search_term, Some(progress_callback))
+                search_context.search_with_progress(&search_term_for_thread, Some(progress_callback))
             });
             
             // Show initial progress
@@ -278,6 +284,7 @@ impl Viewer {
                 Ok(results) => {
                     self.search_matches = results;
                     self.current_match = 0;
+                    self.last_search_term = search_term.clone();
                     
                     if !self.search_matches.is_empty() {
                         self.current_line = self.search_matches[0].saturating_sub(self.viewport_height / 2);
@@ -555,10 +562,12 @@ impl Viewer {
             let current_pos = self.current_line + 1;
             let match_info = if !self.search_matches.is_empty() {
                 format!(" | Match {}/{}", self.current_match + 1, self.search_matches.len())
+            } else if !self.last_search_term.is_empty() {
+                format!(" | No matches found for '{}'", self.last_search_term)
             } else {
                 String::new()
             };
-            let esc_hint = if !self.search_matches.is_empty() {
+            let esc_hint = if !self.search_matches.is_empty() || !self.last_search_term.is_empty() {
                 ", esc: clear search"
             } else {
                 ""
