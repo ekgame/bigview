@@ -54,6 +54,10 @@ impl EventHandler {
         match key.code {
             KeyCode::Char('q') => ViewerAction::Quit,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => ViewerAction::Quit,
+            KeyCode::Esc => {
+                viewer.clear_search();
+                ViewerAction::None
+            }
             KeyCode::Char('/') => {
                 viewer.enter_search_mode();
                 ViewerAction::None

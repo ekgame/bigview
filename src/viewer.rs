@@ -149,6 +149,13 @@ impl Viewer {
         self.search_requested = true;
     }
     
+    pub fn clear_search(&mut self) {
+        self.search_term.clear();
+        self.search_matches.clear();
+        self.current_match = 0;
+        self.search_requested = false;
+    }
+    
     // Progress bar operations
     pub fn show_progress(&mut self, value: f64, message: &str) {
         self.progress_visible = true;
@@ -551,8 +558,13 @@ impl Viewer {
             } else {
                 String::new()
             };
-            format!("Line {}/{} | q: quit, /: search, n: next match{}", 
-                   current_pos, total_lines, match_info)
+            let esc_hint = if !self.search_matches.is_empty() {
+                ", esc: clear search"
+            } else {
+                ""
+            };
+            format!("Line {}/{} | q: quit, /: search, n: next match{}{}", 
+                   current_pos, total_lines, match_info, esc_hint)
         };
 
         let paragraph = Paragraph::new(status)
