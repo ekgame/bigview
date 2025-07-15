@@ -115,11 +115,10 @@ impl Viewer {
                 let line_number = format!("{:6} ", line_num + 1);
                 
                 if !self.search_term.is_empty() && line.contains(&self.search_term) {
-                    let highlighted = self.highlight_search_term(line, &self.search_term);
-                    ListItem::new(Line::from(vec![
-                        Span::styled(line_number, Style::default().fg(Color::Yellow)),
-                        highlighted,
-                    ]))
+                    let highlighted_spans = self.highlight_search_term(line, &self.search_term, line_num);
+                    let mut line_spans = vec![Span::styled(line_number, Style::default().fg(Color::Yellow))];
+                    line_spans.extend(highlighted_spans);
+                    ListItem::new(Line::from(line_spans))
                 } else {
                     ListItem::new(Line::from(vec![
                         Span::styled(line_number, Style::default().fg(Color::Yellow)),
@@ -155,27 +154,42 @@ impl Viewer {
         f.render_widget(paragraph, area);
     }
 
-    fn highlight_search_term<'a>(&self, line: &'a str, term: &str) -> Span<'a> {
+    fn highlight_search_term<'a>(&self, line: &'a str, term: &str, line_num: usize) -> Vec<Span<'a>> {
         if term.is_empty() {
-            return Span::raw(line);
+            return vec![Span::raw(line)];
         }
 
         let mut result = Vec::new();
         let mut last_end = 0;
         
+        // Check if this line contains the current match
+        let is_current_match_line = !self.search_matches.is_empty() && 
+            self.search_matches[self.current_match] == line_num;
+        
+        let mut match_count = 0;
         for (start, part) in line.match_indices(term) {
             if start > last_end {
                 result.push(Span::raw(&line[last_end..start]));
             }
-            result.push(Span::styled(part, Style::default().bg(Color::Yellow).fg(Color::Black)));
+            
+            // For the current match line, only highlight the first occurrence in cyan
+            // All other matches (including other occurrences on the same line) are more muted
+            let style = if is_current_match_line && match_count == 0 {
+                Style::default().bg(Color::Cyan).fg(Color::Black)
+            } else {
+                Style::default().bg(Color::DarkGray).fg(Color::White)
+            };
+            
+            result.push(Span::styled(part, style));
             last_end = start + part.len();
+            match_count += 1;
         }
         
         if last_end < line.len() {
             result.push(Span::raw(&line[last_end..]));
         }
         
-        Span::raw(format!("{}", result.iter().map(|s| s.content.as_ref()).collect::<String>()))
+        result
     }
 
     fn perform_search(&mut self) {
