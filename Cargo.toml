@@ -2,6 +2,8 @@
 name = "bigview"
 version = "0.1.0"
 edition = "2021"
+description = "TUI file viewer for very large text files"
+license = "MIT"
 
 [dependencies]
 crossterm = "0.27"
