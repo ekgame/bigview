@@ -14,7 +14,7 @@ pub struct FileReader {
 impl FileReader {
     pub fn new_empty() -> Result<Self> {
         // Create a temporary empty file for the empty reader
-        let temp_file = std::env::temp_dir().join("bigedit_empty");
+        let temp_file = std::env::temp_dir().join("bigview_empty");
         std::fs::write(&temp_file, "")?;
         
         let file = File::open(&temp_file)?;

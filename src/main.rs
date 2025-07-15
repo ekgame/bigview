@@ -24,7 +24,7 @@ use viewer::{Viewer, ViewerAction};
 use event_handler::EventHandler;
 
 #[derive(Parser)]
-#[command(name = "bigedit")]
+#[command(name = "bigview")]
 #[command(about = "A fast file viewer for large text files")]
 struct Args {
     /// Path to the file to view
