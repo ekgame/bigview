@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -48,6 +48,9 @@ pub struct Viewer {
     selection: Option<Selection>,
     selecting: bool,
     context_menu: Option<ContextMenu>,
+    progress_visible: bool,
+    progress_value: f64,
+    progress_message: String,
 }
 
 impl Viewer {
@@ -63,14 +66,52 @@ impl Viewer {
             selection: None,
             selecting: false,
             context_menu: None,
+            progress_visible: false,
+            progress_value: 0.0,
+            progress_message: String::new(),
+        }
+    }
+    
+    pub fn new_empty() -> Self {
+        // Create a minimal empty FileReader for progress display
+        let empty_file_reader = FileReader::new_empty().unwrap_or_else(|_| {
+            // Fallback - this shouldn't happen but just in case
+            FileReader::new_with_progress(".", None).unwrap()
+        });
+        
+        Self {
+            file_reader: empty_file_reader,
+            current_line: 0,
+            search_term: String::new(),
+            search_matches: Vec::new(),
+            current_match: 0,
+            in_search_mode: false,
+            viewport_height: Constants::DEFAULT_VIEWPORT_HEIGHT,
+            selection: None,
+            selecting: false,
+            context_menu: None,
+            progress_visible: false,
+            progress_value: 0.0,
+            progress_message: String::new(),
         }
     }
     
     pub fn draw(&mut self, f: &mut Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(f.size());
+        let chunks = if self.progress_visible {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(Constants::PROGRESS_BAR_HEIGHT),
+                    Constraint::Length(1),
+                ])
+                .split(f.size())
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
+                .split(f.size())
+        };
 
         self.viewport_height = chunks[0].height as usize;
         
@@ -80,7 +121,12 @@ impl Viewer {
             self.draw_context_menu(f, menu);
         }
         
-        self.draw_status_bar(f, chunks[1]);
+        if self.progress_visible {
+            self.draw_progress_bar(f, chunks[1]);
+            self.draw_status_bar(f, chunks[2]);
+        } else {
+            self.draw_status_bar(f, chunks[1]);
+        }
     }
     
     // State queries
@@ -90,6 +136,19 @@ impl Viewer {
     
     pub fn has_context_menu(&self) -> bool {
         self.context_menu.is_some()
+    }
+    
+    // Progress bar operations
+    pub fn show_progress(&mut self, value: f64, message: &str) {
+        self.progress_visible = true;
+        self.progress_value = value;
+        self.progress_message = message.to_string();
+    }
+    
+    pub fn hide_progress(&mut self) {
+        self.progress_visible = false;
+        self.progress_value = 0.0;
+        self.progress_message.clear();
     }
     
     // Search operations
@@ -114,18 +173,25 @@ impl Viewer {
         self.search_term.pop();
     }
     
-    pub fn perform_search(&mut self) {
+    pub fn perform_search_with_progress(&mut self) {
         if self.search_term.is_empty() {
             self.search_matches.clear();
             return;
         }
         
-        self.search_matches = self.file_reader.search(&self.search_term);
+        // Show initial progress
+        self.show_progress(0.0, "Searching...");
+        
+        // Perform search with progress tracking
+        let search_term = self.search_term.clone();
+        self.search_matches = self.file_reader.search_with_progress(&search_term, None);
         self.current_match = 0;
         
         if !self.search_matches.is_empty() {
             self.current_line = self.search_matches[0].saturating_sub(self.viewport_height / 2);
         }
+        
+        self.hide_progress();
     }
     
     pub fn next_match(&mut self) {
@@ -291,7 +357,7 @@ impl Viewer {
             if let Some(text) = selection.get_text(&self.file_reader) {
                 if !text.contains('\n') {
                     self.search_term = text;
-                    self.perform_search();
+                    self.perform_search_with_progress();
                 }
             }
         }
@@ -362,6 +428,16 @@ impl Viewer {
         } else {
             TextUtils::split_line_into_spans(line, &ranges)
         }
+    }
+    
+    fn draw_progress_bar(&self, f: &mut Frame, area: Rect) {
+        let progress = Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title("Progress"))
+            .gauge_style(Style::default().fg(Constants::PROGRESS_BAR_FG_COLOR).bg(Constants::PROGRESS_BAR_BG_COLOR))
+            .ratio(self.progress_value)
+            .label(format!("{:.1}% - {}", self.progress_value * 100.0, self.progress_message));
+        
+        f.render_widget(progress, area);
     }
     
     fn draw_status_bar(&self, f: &mut Frame, area: Rect) {

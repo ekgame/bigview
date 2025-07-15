@@ -24,6 +24,11 @@ impl Constants {
     pub const CONTEXT_MENU_COPY: &'static str = "Copy";
     pub const CONTEXT_MENU_SEARCH: &'static str = "Search";
     
+    // Progress Bar
+    pub const PROGRESS_BAR_BG_COLOR: ratatui::style::Color = ratatui::style::Color::DarkGray;
+    pub const PROGRESS_BAR_FG_COLOR: ratatui::style::Color = ratatui::style::Color::Green;
+    pub const PROGRESS_BAR_HEIGHT: u16 = 3;
+    
     // Default Values
     pub const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
 }
