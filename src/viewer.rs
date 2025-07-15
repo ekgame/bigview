@@ -427,22 +427,34 @@ impl Viewer {
             if start_line == end_line {
                 // Single line selection
                 if let Some(line) = self.file_reader.get_line(start_line) {
-                    let end_col = end_col.min(line.len());
-                    if start_col < line.len() {
-                        result = line[start_col..end_col].to_string();
+                    let chars: Vec<char> = line.chars().collect();
+                    let char_len = chars.len();
+                    let safe_start = start_col.min(char_len);
+                    let safe_end = end_col.min(char_len);
+                    
+                    if safe_start < char_len && safe_start < safe_end {
+                        result = chars[safe_start..safe_end].iter().collect();
                     }
                 }
             } else {
                 // Multi-line selection
                 for line_num in start_line..=end_line {
                     if let Some(line) = self.file_reader.get_line(line_num) {
+                        let chars: Vec<char> = line.chars().collect();
+                        let char_len = chars.len();
+                        
                         if line_num == start_line {
-                            if start_col < line.len() {
-                                result.push_str(&line[start_col..]);
+                            let safe_start = start_col.min(char_len);
+                            if safe_start < char_len {
+                                let text: String = chars[safe_start..].iter().collect();
+                                result.push_str(&text);
                             }
                         } else if line_num == end_line {
-                            let end_col = end_col.min(line.len());
-                            result.push_str(&line[..end_col]);
+                            let safe_end = end_col.min(char_len);
+                            if safe_end > 0 {
+                                let text: String = chars[..safe_end].iter().collect();
+                                result.push_str(&text);
+                            }
                         } else {
                             result.push_str(line);
                         }
@@ -481,27 +493,36 @@ impl Viewer {
             
             if line_num >= start_line && line_num <= end_line {
                 let mut result = Vec::new();
-                let line_len = line.len();
+                let chars: Vec<char> = line.chars().collect();
+                let char_len = chars.len();
                 
-                let sel_start = if line_num == start_line { start_col } else { 0 };
-                let sel_end = if line_num == end_line { end_col.min(line_len) } else { line_len };
+                let sel_start = if line_num == start_line { start_col.min(char_len) } else { 0 };
+                let sel_end = if line_num == end_line { end_col.min(char_len) } else { char_len };
+                
+                // Ensure valid range
+                if sel_start > sel_end {
+                    return vec![Span::raw(line)];
+                }
                 
                 // Before selection
                 if sel_start > 0 {
-                    result.push(Span::raw(&line[0..sel_start]));
+                    let before_text: String = chars[0..sel_start].iter().collect();
+                    result.push(Span::raw(before_text));
                 }
                 
                 // Selection
-                if sel_start < line_len && sel_start < sel_end {
+                if sel_start < char_len && sel_start < sel_end {
+                    let selected_text: String = chars[sel_start..sel_end].iter().collect();
                     result.push(Span::styled(
-                        &line[sel_start..sel_end],
+                        selected_text,
                         Style::default().bg(Color::Blue).fg(Color::White)
                     ));
                 }
                 
                 // After selection
-                if sel_end < line_len {
-                    result.push(Span::raw(&line[sel_end..]));
+                if sel_end < char_len {
+                    let after_text: String = chars[sel_end..].iter().collect();
+                    result.push(Span::raw(after_text));
                 }
                 
                 result
