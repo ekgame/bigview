@@ -424,7 +424,14 @@ impl Viewer {
     }
     
     pub fn goto_end(&mut self) {
-        self.current_line = self.file_reader.line_count().saturating_sub(1);
+        let total_lines = self.file_reader.line_count();
+        if total_lines <= self.viewport_height {
+            // File fits entirely in viewport, start from beginning
+            self.current_line = 0;
+        } else {
+            // Position so the last line appears at the bottom of viewport
+            self.current_line = total_lines - self.viewport_height;
+        }
     }
     
     // Selection operations
@@ -636,7 +643,7 @@ impl Viewer {
             } else {
                 ""
             };
-            let status = format!("Line {}/{} | q: quit, /: search, n: next match{}{}", 
+            let status = format!("Line {}/{} | q: quit, /: search, n: next match, g: start, G: end{}{}", 
                                current_pos, total_lines, match_info, esc_hint);
 
             let paragraph = Paragraph::new(status)

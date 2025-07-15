@@ -85,6 +85,14 @@ impl EventHandler {
                 viewer.goto_end();
                 ViewerAction::None
             }
+            KeyCode::Char('g') => {
+                viewer.goto_start();
+                ViewerAction::None
+            }
+            KeyCode::Char('G') => {
+                viewer.goto_end();
+                ViewerAction::None
+            }
             _ => ViewerAction::None,
         }
     }
