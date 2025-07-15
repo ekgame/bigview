@@ -1,5 +1,6 @@
 use crate::file_reader::FileReader;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
+use clipboard::{ClipboardContext, ClipboardProvider};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -50,6 +51,16 @@ impl Viewer {
                         }
                         (true, KeyCode::Backspace) => {
                             self.search_term.pop();
+                        }
+                        (true, KeyCode::Char('v')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if let Ok(mut ctx) = ClipboardContext::new() {
+                                if let Ok(clipboard_content) = ctx.get_contents() {
+                                    // Only paste if clipboard contains text (no newlines)
+                                    if !clipboard_content.contains('\n') && !clipboard_content.contains('\r') {
+                                        self.search_term.push_str(&clipboard_content);
+                                    }
+                                }
+                            }
                         }
                         (true, KeyCode::Char(c)) => {
                             self.search_term.push(c);
